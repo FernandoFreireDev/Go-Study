@@ -4,91 +4,92 @@ import (
     "encoding/json"
     "github.com/gorilla/mux"
     "log"
-	"net/http"
-	"database/sql"
-	_ "github.com/go-sql-driver/mysql"
+    "net/http"
+    "github.com/jinzhu/gorm"
+    _ "github.com/go-sql-driver/mysql"
+    "fmt"
 )
 
 type People struct {
-    ID        string   `json:"id,omitempty"`
-    Firstname string   `json:"firstname,omitempty"`
-    Lastname  string   `json:"lastname,omitempty"`
+    ID        string   `gorm:primary_key"`
+    Firstname string
+    Lastname  string
 }
 
-var peopleRepository []People 
+type Retorno struct {
+    Code int
+    Message string
+}
 
-func dbConn() (db *sql.DB) {
+func DbConn() (*gorm.DB, error) {
 	dbDriver := "mysql"
 	dbUser := "root"
 	dbPass := "1234"
 	dbName := "peoples"
 
-	db, err := sql.Open(dbDriver, dbUser+":"+dbPass+"@/"+dbName)
+	db, err := gorm.Open(dbDriver, dbUser+":"+dbPass+"@/"+dbName+"?charset=utf8&parseTime=True&loc=Local")
 
-	if err != nil {
-		panic(err.Error())
-	}
-
-	return db
+	return db, err
 }
 
 func GetPeoples(w http.ResponseWriter, r *http.Request) {
 
-	db := dbConn()
-	selDB, err := db.Query("SELECT * FROM peoples")
+    db, err := DbConn()
+    checkError(err)
 
-	if err != nil {
-		panic(err.Error())
-	}
+    var peoples []People
 
-	var peoples []People
-
-	for selDB.Next() {
-		
-		var id int
-		var firstname, lastname string
-
-		err = selDB.Scan(&id, &firstname, &lastname)
-		if err != nil {
-			panic(err.Error())
-		}
-
-		peoples = append(peoples, People{ID: string(id), Firstname: firstname, Lastname: lastname})
-
-	}	
-
+    db.Table("peoples").Find(&peoples)
+	
     json.NewEncoder(w).Encode(peoples)
+    fmt.Print(peoples)
+
+    defer db.Close()
 }
 
 func GetPeople(w http.ResponseWriter, r *http.Request) {
     params := mux.Vars(r)
-    for _, item := range peopleRepository {
-        if item.ID == params["id"] {
-            json.NewEncoder(w).Encode(item)
-            return
-        }
+
+    db, err := DbConn()
+    checkError(err)
+
+    var people People
+    var count int
+    db.Where("id = ?", params["id"]).First(&people).Count(&count)
+
+    if count == 0 {
+        retorno, _ := json.Marshal(Retorno{http.StatusNotFound, "Usuário não encontrado"})
+        http.Error(w, string(retorno), http.StatusNotFound)
+        return
     }
-    json.NewEncoder(w).Encode(&People{}) 
+
+    json.NewEncoder(w).Encode(people)
 }
 
 func CreatePeople(w http.ResponseWriter, r *http.Request) {
     params := mux.Vars(r)
-    var person People 
-    _ = json.NewDecoder(r.Body).Decode(&person) 
-    person.ID = params["id"] 
-    peopleRepository = append(peopleRepository, person) 
-    json.NewEncoder(w).Encode(peopleRepository)
+
+    db, err := DbConn()
+    checkError(err)
+
+    var people People
+    _ = json.NewDecoder(r.Body).Decode(&people) 
+    people.ID = params["id"] 
+
+    db.Create(&people)
+
+    json.NewEncoder(w).Encode(people)
 }
 
 func DeletePeople(w http.ResponseWriter, r *http.Request) {
     params := mux.Vars(r)
-    for index, item := range peopleRepository {
-        if item.ID == params["id"] {
-            peopleRepository = append(peopleRepository[:index], peopleRepository[index+1:]...)
-            break
-        }
-        json.NewEncoder(w).Encode(peopleRepository)
-    }
+
+    db, err := DbConn()
+    checkError(err)
+
+    db.Where("id = ?", params["id"]).Delete(People{})
+
+    json.NewEncoder(w).Encode(Retorno{http.StatusOK, "Usuário deletado"});
 }
 
 func main() {
@@ -100,4 +101,10 @@ func main() {
     router.HandleFunc("/contato/{id}", DeletePeople).Methods("DELETE")
 
     log.Fatal(http.ListenAndServe(":8000", router))
+}
+
+func checkError(err error) {
+    if err != nil {
+		panic(err.Error())
+	}
 }
